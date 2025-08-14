@@ -1,0 +1,75 @@
+# FlexTok Encoder Finetuning Configuration
+# This file contains all the hyperparameters and settings for finetuning
+
+# Data Configuration
+data:
+  train_data_dir: "./data/train" # Path to training images
+  val_data_dir: "./data/val" # Path to validation images
+  image_size: 256 # Image size for training
+  batch_size: 8 # Batch size per device
+  num_workers: 4 # Number of data loader workers
+  max_images: null # Max images to use (null for all, useful for debugging)
+
+# Model Architecture
+model:
+  encoder_dim: 768 # Encoder hidden dimension
+  encoder_depth: 12 # Number of transformer layers
+  encoder_heads: 12 # Number of attention heads
+  encoder_head_dim: 64 # Dimension per attention head
+  encoder_mlp_ratio: 4.0 # MLP expansion ratio
+  patch_size: 16 # Image patch size
+  max_seq_len: 1024 # Maximum sequence length
+
+# Training Configuration
+training:
+  learning_rate: 1e-4 # Base learning rate
+  weight_decay: 0.01 # Weight decay for AdamW
+  max_epochs: 100 # Maximum training epochs
+  max_steps: 100000 # Maximum training steps
+  warmup_steps: 1000 # Learning rate warmup steps
+
+  # Loss weights
+  reconstruction_weight: 1.0 # Weight for reconstruction loss
+  token_consistency_weight: 0.1 # Weight for token consistency loss
+
+  # Regularization
+  dropout: 0.1 # Dropout rate
+  drop_path_rate: 0.1 # Stochastic depth rate
+
+# Checkpoint Configuration
+checkpoint:
+  pretrained_encoder_path: null # Path to pretrained encoder (optional)
+  output_dir: "./checkpoints" # Output directory for checkpoints
+  freeze_vae: true # Whether to freeze VAE parameters
+  freeze_regularizer: true # Whether to freeze regularizer parameters
+
+# Logging Configuration
+logging:
+  log_every_n_steps: 50 # Log every N steps
+  use_wandb: false # Whether to use Weights & Biases
+  tensorboard_dir: "./logs" # TensorBoard log directory
+
+# Hardware Configuration
+hardware:
+  accelerator: "auto" # Accelerator type (auto, gpu, cpu)
+  devices: 1 # Number of devices to use
+  precision: "16-mixed" # Training precision (16-mixed, 32, 64)
+  gradient_clip_val: 1.0 # Gradient clipping value
+  accumulate_grad_batches: 1 # Gradient accumulation steps
+
+# Advanced Configuration
+advanced:
+  # Learning rate scheduling
+  lr_scheduler: "onecycle" # Learning rate scheduler type
+  lr_warmup_strategy: "cos" # Warmup strategy
+
+  # Mixed precision
+  use_amp: true # Whether to use automatic mixed precision
+
+  # Distributed training
+  strategy: "auto" # Distributed strategy (auto, ddp, ddp_spawn)
+  sync_batchnorm: false # Whether to sync batch norm across devices
+
+  # Memory optimization
+  use_activation_checkpointing: true # Whether to use activation checkpointing
+  use_gradient_checkpointing: false # Whether to use gradient checkpointing
