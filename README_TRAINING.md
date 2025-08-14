@@ -1,6 +1,6 @@
-# FlexTok Encoder Finetuning
+# FlexTok Encoder Finetuning with Torch Tensors
 
-This repository contains a PyTorch Lightning script for finetuning the FlexTok Encoder component on custom RGB image datasets.
+This repository contains a PyTorch Lightning script for finetuning the FlexTok Encoder component on custom RGB image datasets stored as torch tensors.
 
 ## Overview
 
@@ -9,15 +9,17 @@ FlexTok is a state-of-the-art image tokenizer that converts images into flexible
 - **Domain adaptation**: Adapting the encoder to specific image domains (e.g., medical images, satellite imagery)
 - **Task-specific finetuning**: Optimizing the encoder for specific downstream tasks
 - **Efficient training**: Training only the encoder while keeping other components frozen
+- **Direct tensor input**: Works directly with torch tensors instead of image files
 
 ## Features
 
 - **Modular Architecture**: Trains only the encoder component while keeping VAE and regularizer frozen
 - **PyTorch Lightning**: Modern training framework with built-in distributed training, mixed precision, and logging
-- **Flexible Data Loading**: Supports custom RGB image datasets with automatic preprocessing
+- **Flexible Data Loading**: Supports torch tensor datasets with automatic preprocessing
 - **Advanced Training Features**: Learning rate scheduling, gradient clipping, early stopping, and checkpointing
 - **Comprehensive Logging**: TensorBoard and Weights & Biases integration
 - **Production Ready**: Includes validation, error handling, and model saving
+- **Multiple Formats**: Supports .pt, .pth, .npy, .npz files and direct tensor input
 
 ## Installation
 
@@ -34,34 +36,59 @@ FlexTok is a state-of-the-art image tokenizer that converts images into flexible
 
 ## Data Preparation
 
-### Directory Structure
+### Supported Tensor Formats
 
-Organize your data as follows:
+The training script supports multiple tensor formats:
 
+- **PyTorch tensors**: `.pt` or `.pth` files
+- **NumPy arrays**: `.npy` files
+- **Compressed NumPy**: `.npz` files
+- **Direct tensor input**: For testing with random data
+
+### Tensor Requirements
+
+- **Shape**: `[N, C, H, W]` where:
+  - `N`: Number of images
+  - `C`: Number of channels (3 for RGB)
+  - `H`: Image height
+  - `W`: Image width
+- **Data type**: `torch.float32` or `torch.float16`
+- **Value range**: Typically [0, 1] or [-1, 1] (will be normalized automatically)
+
+### Example Data Structure
+
+```python
+import torch
+
+# Create sample dataset
+num_images = 1000
+image_size = 256
+channels = 3
+
+# Training data: [N, C, H, W]
+train_tensors = torch.randn(num_images, channels, image_size, image_size)
+val_tensors = torch.randn(200, channels, image_size, image_size)
+
+# Optional labels
+train_labels = torch.randint(0, 10, (num_images,))
+val_labels = torch.randint(0, 10, (200,))
+
+# Save to files
+torch.save(train_tensors, "train_tensors.pt")
+torch.save(val_tensors, "val_tensors.pt")
+torch.save(train_labels, "train_labels.pt")
+torch.save(val_labels, "val_labels.pt")
 ```
-data/
-├── train/
-│   ├── image1.jpg
-│   ├── image2.png
-│   └── ...
-└── val/
-    ├── image1.jpg
-    ├── image2.png
-    └── ...
+
+### Quick Setup with Sample Data
+
+Run the example script to create sample tensor datasets:
+
+```bash
+python example_tensor_training.py
 ```
 
-### Supported Formats
-
-- JPEG (.jpg, .jpeg)
-- PNG (.png)
-- BMP (.bmp)
-- TIFF (.tiff)
-
-### Image Requirements
-
-- **Format**: RGB images
-- **Size**: Will be automatically resized to the specified `image_size` (default: 256x256)
-- **Normalization**: Automatically normalized to [-1, 1] range
+This will create sample data in `./sample_data/` and show you the training commands.
 
 ## Training
 
@@ -69,8 +96,20 @@ data/
 
 ```bash
 python train_flextok_encoder.py \
-    --train_data_dir ./data/train \
-    --val_data_dir ./data/val \
+    --train_data ./data/train_tensors.pt \
+    --val_data ./data/val_tensors.pt \
+    --batch_size 8 \
+    --max_epochs 100
+```
+
+### Training with Labels
+
+```bash
+python train_flextok_encoder.py \
+    --train_data ./data/train_tensors.pt \
+    --val_data ./data/val_tensors.pt \
+    --train_labels ./data/train_labels.pt \
+    --val_labels ./data/val_labels.pt \
     --batch_size 8 \
     --max_epochs 100
 ```
@@ -79,8 +118,8 @@ python train_flextok_encoder.py \
 
 ```bash
 python train_flextok_encoder.py \
-    --train_data_dir ./data/train \
-    --val_data_dir ./data/val \
+    --train_data ./data/train_tensors.pt \
+    --val_data ./data/val_tensors.pt \
     --encoder_dim 1024 \
     --encoder_depth 16 \
     --learning_rate 5e-5 \
@@ -94,11 +133,21 @@ python train_flextok_encoder.py \
 
 ```bash
 python train_flextok_encoder.py \
-    --train_data_dir ./data/train \
-    --val_data_dir ./data/val \
+    --train_data ./data/train_tensors.pt \
+    --val_data ./data/val_tensors.pt \
     --pretrained_encoder_path ./pretrained_encoder.ckpt \
     --learning_rate 1e-5 \
     --batch_size 8
+```
+
+### Testing with Random Data
+
+```bash
+python train_flextok_encoder.py \
+    --train_data 'tensor:(800,3,256,256)' \
+    --val_data 'tensor:(200,3,256,256)' \
+    --batch_size 8 \
+    --max_epochs 10
 ```
 
 ## Configuration
@@ -107,11 +156,15 @@ python train_flextok_encoder.py \
 
 #### Data Arguments
 
-- `--train_data_dir`: Training data directory (required)
-- `--val_data_dir`: Validation data directory (required)
+- `--train_data`: Path to training data tensors (.pt, .pth, .npy, .npz) or "tensor:shape" for testing
+- `--val_data`: Path to validation data tensors (.pt, .pth, .npy, .npz) or "tensor:shape" for testing
+- `--train_labels`: Path to training labels (optional)
+- `--val_labels`: Path to validation labels (optional)
 - `--image_size`: Image size for training (default: 256)
 - `--batch_size`: Batch size per device (default: 8)
 - `--max_images`: Maximum images to use (default: all)
+- `--normalize`: Whether to normalize images (default: True)
+- `--channel_first`: Whether tensors are in [N, C, H, W] format (default: True)
 
 #### Model Arguments
 
@@ -148,7 +201,7 @@ python train_flextok_encoder.py --config configs/finetune_encoder.yaml
 The training script implements a simplified FlexTok encoder pipeline:
 
 ```
-Input Image → Image Patching → Linear Projection → Transformer Encoder → Reconstruction Head
+Input Tensor → Image Patching → Linear Projection → Transformer Encoder → Reconstruction Head
 ```
 
 ### Components
@@ -215,13 +268,14 @@ from example_usage import TrainedFlexTokEncoder
 # Load trained encoder
 encoder = TrainedFlexTokEncoder("./checkpoints/final_model.ckpt")
 
-# Encode single image
-tokens = encoder.encode_image("./test_image.jpg")
+# Encode single image tensor
+image_tensor = torch.randn(3, 256, 256)  # [C, H, W]
+tokens = encoder.encode_image_tensor(image_tensor)
 print(f"Encoded tokens shape: {tokens.shape}")
 
-# Encode batch of images
-image_paths = ["./img1.jpg", "./img2.jpg", "./img3.jpg"]
-batch_tokens = encoder.encode_batch(image_paths)
+# Encode batch of image tensors
+batch_tensors = torch.randn(4, 3, 256, 256)  # [N, C, H, W]
+batch_tokens = encoder.encode_batch_tensors(batch_tensors)
 print(f"Batch tokens shape: {batch_tokens.shape}")
 ```
 
@@ -283,15 +337,31 @@ print(f"Batch tokens shape: {batch_tokens.shape}")
 - Adjust loss weights
 - Check data quality
 
+#### Tensor Format Issues
+
+- Ensure tensors are in [N, C, H, W] format
+- Check tensor dimensions match expected shapes
+- Verify data type is float32 or float16
+
 ### Debug Mode
 
 For debugging, use a small subset of data:
 
 ```bash
 python train_flextok_encoder.py \
-    --train_data_dir ./data/train \
-    --val_data_dir ./data/val \
+    --train_data ./data/train_tensors.pt \
+    --val_data ./data/val_tensors.pt \
     --max_images 100 \
+    --batch_size 2 \
+    --max_epochs 5
+```
+
+Or use random data for quick testing:
+
+```bash
+python train_flextok_encoder.py \
+    --train_data 'tensor:(100,3,256,256)' \
+    --val_data 'tensor:(20,3,256,256)' \
     --batch_size 2 \
     --max_epochs 5
 ```
@@ -319,15 +389,13 @@ Extend the `CustomImageDataset` class:
 
 ```python
 class CustomImageDataset(Dataset):
-    def __init__(self, data_dir, augment=True):
+    def __init__(self, data_tensors, augment=True):
         # ... existing code ...
 
         if augment:
-            self.transform = transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomRotation(10),
-                transforms.ColorJitter(0.1, 0.1, 0.1),
-                # ... your custom augmentations
+            # Add custom tensor augmentations
+            self.augment_transform = transforms.Compose([
+                # Add your custom tensor transformations
             ])
 ```
 

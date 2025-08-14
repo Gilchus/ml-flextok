@@ -45,55 +45,97 @@ except ImportError as e:
 
 
 class CustomImageDataset(Dataset):
-    """Custom RGB image dataset for FlexTok encoder finetuning."""
+    """Custom RGB image dataset for FlexTok encoder finetuning using torch tensors."""
     
     def __init__(
         self, 
-        data_dir: str, 
+        data_tensors: torch.Tensor,  # Shape: [N, C, H, W] or [N, H, W, C]
+        labels: Optional[torch.Tensor] = None,  # Optional labels
         image_size: int = 256,
         mean: List[float] = [0.5, 0.5, 0.5],
         std: List[float] = [0.5, 0.5, 0.5],
-        max_images: Optional[int] = None
+        max_images: Optional[int] = None,
+        normalize: bool = True,
+        channel_first: bool = True  # True if tensors are [N, C, H, W], False if [N, H, W, C]
     ):
-        self.data_dir = Path(data_dir)
+        self.data_tensors = data_tensors
+        self.labels = labels
         self.image_size = image_size
         self.mean = mean
         self.std = std
+        self.normalize = normalize
+        self.channel_first = channel_first
         
-        # Get all image files
-        self.image_files = []
-        for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.tiff']:
-            self.image_files.extend(list(self.data_dir.rglob(ext)))
+        # Ensure tensors are in the correct format [N, C, H, W]
+        if not self.channel_first:
+            # Convert from [N, H, W, C] to [N, C, H, W]
+            self.data_tensors = self.data_tensors.permute(0, 3, 1, 2)
         
+        # Limit number of images if specified
         if max_images:
-            self.image_files = self.image_files[:max_images]
+            self.data_tensors = self.data_tensors[:max_images]
+            if self.labels is not None:
+                self.labels = self.labels[:max_images]
         
         # Setup transforms
         self.transform = transforms.Compose([
             transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std)
+            transforms.Normalize(mean=mean, std=std) if normalize else transforms.Lambda(lambda x: x)
         ])
     
     def __len__(self):
-        return len(self.image_files)
+        return len(self.data_tensors)
     
     def __getitem__(self, idx):
-        img_path = self.image_files[idx]
         try:
-            image = Image.open(img_path).convert('RGB')
-            image_tensor = self.transform(image)
-            return {
+            # Get image tensor
+            image_tensor = self.data_tensors[idx]
+            
+            # Ensure it's a 3D tensor [C, H, W]
+            if image_tensor.dim() == 4:
+                image_tensor = image_tensor.squeeze(0)
+            
+            # Resize if needed
+            if image_tensor.shape[-2:] != (self.image_size, self.image_size):
+                image_tensor = F.interpolate(
+                    image_tensor.unsqueeze(0), 
+                    size=(self.image_size, self.image_size), 
+                    mode='bilinear', 
+                    align_corners=False
+                ).squeeze(0)
+            
+            # Apply normalization if enabled
+            if self.normalize:
+                image_tensor = self.transform(image_tensor)
+            
+            # Prepare return dictionary
+            result = {
                 'rgb': image_tensor,
-                'file_path': str(img_path)
+                'idx': idx
             }
+            
+            # Add labels if available
+            if self.labels is not None:
+                result['label'] = self.labels[idx]
+            
+            return result
+            
         except Exception as e:
-            print(f"Error loading image {img_path}: {e}")
+            print(f"Error processing tensor at index {idx}: {e}")
             # Return a black image as fallback
-            return {
-                'rgb': torch.zeros(3, self.image_size, self.image_size),
-                'file_path': str(img_path)
+            fallback_tensor = torch.zeros(3, self.image_size, self.image_size)
+            if self.normalize:
+                fallback_tensor = self.transform(fallback_tensor)
+            
+            result = {
+                'rgb': fallback_tensor,
+                'idx': idx
             }
+            
+            if self.labels is not None:
+                result['label'] = self.labels[idx] if idx < len(self.labels) else 0
+            
+            return result
 
 
 class FlexTokEncoderModule(pl.LightningModule):
@@ -362,37 +404,51 @@ class FlexTokEncoderModule(pl.LightningModule):
 
 
 class FlexTokDataModule(pl.LightningDataModule):
-    """Data module for FlexTok training."""
+    """Data module for FlexTok training using torch tensor datasets."""
     
     def __init__(
         self,
-        train_data_dir: str,
-        val_data_dir: str,
+        train_tensors: torch.Tensor,  # Training data tensors [N, C, H, W]
+        val_tensors: torch.Tensor,    # Validation data tensors [N, C, H, W]
+        train_labels: Optional[torch.Tensor] = None,  # Optional training labels
+        val_labels: Optional[torch.Tensor] = None,    # Optional validation labels
         image_size: int = 256,
         batch_size: int = 8,
         num_workers: int = 4,
-        max_images: Optional[int] = None
+        max_images: Optional[int] = None,
+        normalize: bool = True,
+        channel_first: bool = True
     ):
         super().__init__()
-        self.train_data_dir = train_data_dir
-        self.val_data_dir = val_data_dir
+        self.train_tensors = train_tensors
+        self.val_tensors = val_tensors
+        self.train_labels = train_labels
+        self.val_labels = val_labels
         self.image_size = image_size
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.max_images = max_images
+        self.normalize = normalize
+        self.channel_first = channel_first
     
     def setup(self, stage: Optional[str] = None):
         """Setup datasets."""
         if stage == 'fit' or stage is None:
             self.train_dataset = CustomImageDataset(
-                self.train_data_dir,
+                data_tensors=self.train_tensors,
+                labels=self.train_labels,
                 image_size=self.image_size,
-                max_images=self.max_images
+                max_images=self.max_images,
+                normalize=self.normalize,
+                channel_first=self.channel_first
             )
             self.val_dataset = CustomImageDataset(
-                self.val_data_dir,
+                data_tensors=self.val_tensors,
+                labels=self.val_labels,
                 image_size=self.image_size,
-                max_images=self.max_images
+                max_images=self.max_images,
+                normalize=self.normalize,
+                channel_first=self.channel_first
             )
     
     def train_dataloader(self):
@@ -418,21 +474,64 @@ class FlexTokDataModule(pl.LightningDataModule):
         )
 
 
+def load_tensor_dataset(data_path: str, max_images: Optional[int] = None) -> torch.Tensor:
+    """Load tensor dataset from various formats."""
+    if data_path.endswith('.pt') or data_path.endswith('.pth'):
+        # Load PyTorch tensor file
+        data = torch.load(data_path, map_location='cpu')
+    elif data_path.endswith('.npy'):
+        # Load NumPy array and convert to tensor
+        import numpy as np
+        data = torch.from_numpy(np.load(data_path))
+    elif data_path.endswith('.npz'):
+        # Load compressed NumPy array
+        import numpy as np
+        data = np.load(data_path)
+        # Assume first array is the data
+        data = torch.from_numpy(data[data.files[0]])
+    else:
+        raise ValueError(f"Unsupported file format: {data_path}")
+    
+    # Ensure it's a 4D tensor [N, C, H, W]
+    if data.dim() == 3:
+        # Single image, add batch dimension
+        data = data.unsqueeze(0)
+    elif data.dim() == 4:
+        # Already in correct format
+        pass
+    else:
+        raise ValueError(f"Expected 3D or 4D tensor, got {data.dim()}D")
+    
+    # Limit number of images if specified
+    if max_images and len(data) > max_images:
+        data = data[:max_images]
+    
+    return data
+
+
 def main():
     """Main training function."""
     parser = argparse.ArgumentParser(description='Finetune FlexTok Encoder')
     
-    # Data arguments
-    parser.add_argument('--train_data_dir', type=str, required=True,
-                       help='Directory containing training images')
-    parser.add_argument('--val_data_dir', type=str, required=True,
-                       help='Directory containing validation images')
+    # Data arguments - now supporting both file paths and tensor data
+    parser.add_argument('--train_data', type=str, required=True,
+                       help='Path to training data (.pt, .pth, .npy, .npz) or "tensor:shape" for direct input')
+    parser.add_argument('--val_data', type=str, required=True,
+                       help='Path to validation data (.pt, .pth, .npy, .npz) or "tensor:shape" for direct input')
+    parser.add_argument('--train_labels', type=str, default=None,
+                       help='Path to training labels (optional)')
+    parser.add_argument('--val_labels', type=str, default=None,
+                       help='Path to validation labels (optional)')
     parser.add_argument('--image_size', type=int, default=256,
                        help='Image size for training')
     parser.add_argument('--batch_size', type=int, default=8,
                        help='Batch size for training')
     parser.add_argument('--max_images', type=int, default=None,
                        help='Maximum number of images to use (for debugging)')
+    parser.add_argument('--normalize', action='store_true', default=True,
+                       help='Whether to normalize images')
+    parser.add_argument('--channel_first', action='store_true', default=True,
+                       help='Whether tensors are in [N, C, H, W] format')
     
     # Model arguments
     parser.add_argument('--encoder_dim', type=int, default=768,
@@ -483,14 +582,63 @@ def main():
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
+    # Load training data
+    print(f"Loading training data from {args.train_data}")
+    if args.train_data.startswith('tensor:'):
+        # Direct tensor input for testing
+        shape_str = args.train_data.replace('tensor:', '')
+        shape = tuple(map(int, shape_str.strip('()').split(',')))
+        train_tensors = torch.randn(shape)
+        print(f"Generated random training tensors with shape {shape}")
+    else:
+        train_tensors = load_tensor_dataset(args.train_data, args.max_images)
+    
+    # Load validation data
+    print(f"Loading validation data from {args.val_data}")
+    if args.val_data.startswith('tensor:'):
+        # Direct tensor input for testing
+        shape_str = args.val_data.replace('tensor:', '')
+        shape = tuple(map(int, shape_str.strip('()').split(',')))
+        val_tensors = torch.randn(shape)
+        print(f"Generated random validation tensors with shape {shape}")
+    else:
+        val_tensors = load_tensor_dataset(args.val_data, args.max_images)
+    
+    # Load labels if provided
+    train_labels = None
+    val_labels = None
+    
+    if args.train_labels:
+        print(f"Loading training labels from {args.train_labels}")
+        train_labels = load_tensor_dataset(args.train_labels, args.max_images)
+        if train_labels.dim() == 2:
+            train_labels = train_labels.squeeze(1)  # Convert [N, 1] to [N]
+    
+    if args.val_labels:
+        print(f"Loading validation labels from {args.val_labels}")
+        val_labels = load_tensor_dataset(args.val_labels, args.max_images)
+        if val_labels.dim() == 2:
+            val_labels = val_labels.squeeze(1)  # Convert [N, 1] to [N]
+    
+    print(f"Training data shape: {train_tensors.shape}")
+    print(f"Validation data shape: {val_tensors.shape}")
+    if train_labels is not None:
+        print(f"Training labels shape: {train_labels.shape}")
+    if val_labels is not None:
+        print(f"Validation labels shape: {val_labels.shape}")
+    
     # Initialize data module
     data_module = FlexTokDataModule(
-        train_data_dir=args.train_data_dir,
-        val_data_dir=args.val_data_dir,
+        train_tensors=train_tensors,
+        val_tensors=val_tensors,
+        train_labels=train_labels,
+        val_labels=val_labels,
         image_size=args.image_size,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        max_images=args.max_images
+        max_images=args.max_images,
+        normalize=args.normalize,
+        channel_first=args.channel_first
     )
     
     # Initialize model
